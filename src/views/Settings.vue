@@ -156,7 +156,7 @@
             <div class="toggle-item">
               <div>
                 <strong>New Incident Alert Sound</strong>
-                <p>Audible chirp whenever a citizen submits a report from Carmen, Lapasan, or city barangays.</p>
+                <p>Audible chirp whenever a citizen submits a report from a covered barangay.</p>
               </div>
               <input v-model="notifications.newReports" type="checkbox" class="checkbox-input" />
             </div>
@@ -200,12 +200,12 @@
 
             <div class="form-item">
               <label>Emergency Dispatch PIN (4 digits)</label>
-              <input v-model="passwordForm.pin" type="password" maxlength="6" class="form-input" placeholder="1234" />
+              <input v-model="passwordForm.pin" type="password" maxlength="6" class="form-input" placeholder="Enter a new PIN" />
             </div>
 
             <div class="form-item">
               <label>New Password</label>
-              <input v-model="passwordForm.newPassword" type="password" class="form-input" placeholder="At least 6 characters" />
+              <input v-model="passwordForm.newPassword" type="password" class="form-input" placeholder="At least 8 characters" />
             </div>
 
             <div class="form-item">
@@ -284,56 +284,57 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { authApi, getCurrentUser } from '../services/api'
+import { authApi } from '../services/api'
 
 const router = useRouter()
 
 const activeSection = ref('account')
 
 const account = ref({
-  name: 'CLENRO Central Admin',
-  email: 'admin@clenro-cdo.gov.ph',
-  phone: '0917 123 4567'
+  name: '',
+  email: '',
+  phone: ''
 })
 
-onMounted(() => {
-  const currentUser = getCurrentUser()
-  if (currentUser) {
-    account.value.name = currentUser.fullName || account.value.name
-    account.value.email = currentUser.email || account.value.email
-    account.value.phone = currentUser.phoneNumber || account.value.phone
-  }
-})
-
-const notifications = ref({
-  newReports: true,
-  dispatch: true,
-  resolution: true,
-  system: true
-})
-
+const notifications = ref({})
 const passwordForm = ref({
   current: '',
   newPassword: '',
   confirm: '',
-  pin: '1234'
+  pin: ''
 })
 
-const system = ref({
-  dashboardView: 'Executive Dashboard',
-  ticketStatus: 'All Statuses',
-  reportPeriod: 'Current Month',
-  autoRefresh: true
-})
-
+const system = ref({})
 const savedMessage = ref('')
 
 function showSavedMessage(message) {
   savedMessage.value = message
   setTimeout(() => {
     savedMessage.value = ''
-  }, 2500)
+  }, 3500)
 }
+
+onMounted(async () => {
+  try {
+    const [profileResponse, settingsResponse] = await Promise.all([
+      authApi.getProfile(),
+      authApi.getSettings()
+    ])
+    const profile = profileResponse.data
+    const settings = settingsResponse.data
+
+    account.value = {
+      name: profile.fullName || '',
+      email: profile.email || '',
+      phone: profile.phoneNumber || ''
+    }
+    notifications.value = settings.notifications
+    system.value = settings.system
+  } catch (err) {
+    console.error('Failed to load settings:', err)
+    showSavedMessage(err.message || 'Unable to load settings.')
+  }
+})
 
 async function saveAccount() {
   try {
@@ -344,12 +345,20 @@ async function saveAccount() {
     })
     showSavedMessage('Profile changes saved successfully.')
   } catch (err) {
-    showSavedMessage('Preferences updated.')
+    console.error('Failed to save profile:', err)
+    showSavedMessage(err.message || 'Unable to save profile changes.')
   }
 }
 
-function saveNotifications() {
-  showSavedMessage('Notification settings updated.')
+async function saveNotifications() {
+  try {
+    const response = await authApi.updateSettings({ notifications: notifications.value })
+    notifications.value = response.data.notifications
+    showSavedMessage('Notification settings saved.')
+  } catch (err) {
+    console.error('Failed to save notification settings:', err)
+    showSavedMessage(err.message || 'Unable to save notification settings.')
+  }
 }
 
 async function changePassword() {
@@ -363,37 +372,55 @@ async function changePassword() {
     return
   }
 
+  if (passwordForm.value.newPassword && !passwordForm.value.current) {
+    showSavedMessage('Enter your current password to change it.')
+    return
+  }
+
   try {
-    if (passwordForm.value.pin) {
-      await authApi.updateProfile({ securityPin: passwordForm.value.pin })
+    const credentials = {}
+    if (passwordForm.value.pin) credentials.securityPin = passwordForm.value.pin
+    if (passwordForm.value.newPassword) {
+      credentials.currentPassword = passwordForm.value.current
+      credentials.newPassword = passwordForm.value.newPassword
     }
+    await authApi.updateProfile(credentials)
     showSavedMessage('Security credentials updated.')
     passwordForm.value.current = ''
     passwordForm.value.newPassword = ''
     passwordForm.value.confirm = ''
+    passwordForm.value.pin = ''
   } catch (err) {
-    showSavedMessage('Security updated.')
+    console.error('Failed to update security credentials:', err)
+    showSavedMessage(err.message || 'Unable to update security credentials.')
   }
 }
 
-function saveSystem() {
-  showSavedMessage('System preferences committed.')
+async function saveSystem() {
+  try {
+    const response = await authApi.updateSettings({ system: system.value })
+    system.value = response.data.system
+    showSavedMessage('System preferences saved.')
+  } catch (err) {
+    console.error('Failed to save system preferences:', err)
+    showSavedMessage(err.message || 'Unable to save system preferences.')
+  }
 }
 
-function resetToDefaults() {
-  notifications.value = { newReports: true, dispatch: true, resolution: true, system: true }
-  system.value = {
-    dashboardView: 'Executive Dashboard',
-    ticketStatus: 'All Statuses',
-    reportPeriod: 'Current Month',
-    autoRefresh: true
+async function resetToDefaults() {
+  try {
+    const response = await authApi.resetSettings()
+    notifications.value = response.data.notifications
+    system.value = response.data.system
+    showSavedMessage('Preferences restored to defaults.')
+  } catch (err) {
+    console.error('Failed to reset preferences:', err)
+    showSavedMessage(err.message || 'Unable to reset preferences.')
   }
-  showSavedMessage('Preferences restored to defaults.')
 }
 
 function logout() {
-  localStorage.removeItem('citycare_admin_token')
-  localStorage.removeItem('user')
+  authApi.logout()
   router.push('/login')
 }
 </script>

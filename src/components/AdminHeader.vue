@@ -1,10 +1,19 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { getCurrentUser } from '../services/api'
+import { authApi } from '../services/api'
 
 const router = useRouter()
-const currentUser = computed(() => getCurrentUser())
+const currentUser = ref(null)
+
+onMounted(async () => {
+  try {
+    const response = await authApi.getProfile()
+    currentUser.value = response.data
+  } catch (err) {
+    console.error('Failed to load administrator profile:', err)
+  }
+})
 
 const initials = computed(() => {
   const user = currentUser.value

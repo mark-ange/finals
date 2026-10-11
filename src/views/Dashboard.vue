@@ -5,6 +5,7 @@
       <div>
         <h1>CityCare CDO Dashboard</h1>
         <p>Waste Management & Sanitation Operations</p>
+        <p v-if="errorMessage" class="text-red" role="alert">{{ errorMessage }}</p>
       </div>
       
       <div class="header-actions">
@@ -170,7 +171,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { dashboardApi, fleetApi } from '../services/api'
+import { dashboardApi } from '../services/api'
 
 const router = useRouter()
 
@@ -184,13 +185,14 @@ const stats = ref({
 })
 
 const fleetSummary = ref({
-  total: 5,
-  inTransit: 2,
-  idle: 2,
-  maintenance: 1
+  total: 0,
+  inTransit: 0,
+  idle: 0,
+  maintenance: 0
 })
 
 const isRefreshing = ref(false)
+const errorMessage = ref('')
 let pollTimer = null
 
 function normalizeStatus(status) {
@@ -209,12 +211,10 @@ function statusClass(status) {
 
 async function loadDashboardData() {
   try {
-    const [dashRes, fleetRes] = await Promise.all([
-      dashboardApi.getStats(),
-      fleetApi.getAll().catch(() => ({ data: [] }))
-    ])
+    const dashRes = await dashboardApi.getStats()
 
     if (dashRes && dashRes.data) {
+      errorMessage.value = ''
       stats.value = {
         totalTickets: dashRes.data.totalTickets || 0,
         pending: dashRes.data.pending || 0,
@@ -223,19 +223,17 @@ async function loadDashboardData() {
         liveQueue: dashRes.data.liveQueue || [],
         barangayStats: dashRes.data.barangayStats || []
       }
-    }
 
-    if (fleetRes && fleetRes.data) {
-      const trucks = fleetRes.data
       fleetSummary.value = {
-        total: trucks.length,
-        inTransit: trucks.filter(t => t.status === 'In Transit').length,
-        idle: trucks.filter(t => t.status === 'Idle').length,
-        maintenance: trucks.filter(t => t.status === 'Maintenance').length
+        total: dashRes.data.fleet?.total || 0,
+        inTransit: dashRes.data.fleet?.inTransit || 0,
+        idle: dashRes.data.fleet?.idle || 0,
+        maintenance: dashRes.data.fleet?.maintenance || 0
       }
     }
   } catch (err) {
     console.error('Failed to load dashboard data:', err)
+    errorMessage.value = err.message || 'Unable to load dashboard data.'
   } finally {
     isRefreshing.value = false
   }

@@ -1,8 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
+const { body } = require('express-validator');
 const Fleet = require('../models/Fleet');
 const memoryStore = require('../config/memoryStore');
+const { apiLimiter, sanitizeMongoDB, validateInput } = require('../middleware/securityMiddleware');
+const { protect, adminOnly } = require('../middleware/authMiddleware');
 
 // @route   GET /api/fleet
 // @desc    Get all vehicles and drivers with status summary
@@ -51,7 +54,20 @@ router.get('/', async (req, res) => {
 // @route   POST /api/fleet
 // @desc    Add a new vehicle and driver
 // @access  Public
-router.post('/', async (req, res) => {
+router.post('/', 
+  apiLimiter,
+  sanitizeMongoDB,
+  validateInput([
+    body('plate').notEmpty().isString().trim().escape().withMessage('License plate is required'),
+    body('driver').notEmpty().isString().trim().escape().withMessage('Driver name is required'),
+    body('barangay').optional().isString().trim().escape(),
+    body('status').optional().isString().trim().escape(),
+    body('truckId').optional().isString().trim().escape(),
+    body('position').optional().isObject()
+  ]),
+  protect,
+  adminOnly,
+  async (req, res) => {
   try {
     const { id, truckId, plate, barangay, driver, status, position } = req.body;
     const resolvedId = (id || truckId || `TRK-${Math.floor(100 + Math.random() * 900)}`).trim();
@@ -99,7 +115,19 @@ router.post('/', async (req, res) => {
 // @route   PUT /api/fleet/:id
 // @desc    Update vehicle status or assignment
 // @access  Public
-router.put('/:id', async (req, res) => {
+router.put('/:id', 
+  apiLimiter,
+  sanitizeMongoDB,
+  validateInput([
+    body('status').optional().isString().trim().escape(),
+    body('driver').optional().isString().trim().escape(),
+    body('barangay').optional().isString().trim().escape(),
+    body('plate').optional().isString().trim().escape(),
+    body('position').optional().isObject()
+  ]),
+  protect,
+  adminOnly,
+  async (req, res) => {
   try {
     const param = req.params.id;
     const { status, driver, barangay, plate, position } = req.body;
@@ -142,7 +170,12 @@ router.put('/:id', async (req, res) => {
 // @route   DELETE /api/fleet/:id
 // @desc    Delete vehicle
 // @access  Public
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', 
+  apiLimiter,
+  sanitizeMongoDB,
+  protect,
+  adminOnly,
+  async (req, res) => {
   try {
     const param = req.params.id;
     const truck = await Fleet.findOneAndDelete({

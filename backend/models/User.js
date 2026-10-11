@@ -34,6 +34,29 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: '1234'
   },
+  notificationPreferences: {
+    newReports: { type: Boolean, default: true },
+    dispatch: { type: Boolean, default: true },
+    resolution: { type: Boolean, default: true }
+  },
+  systemPreferences: {
+    dashboardView: {
+      type: String,
+      enum: ['Executive Dashboard', 'Incident Queue', 'Fleet Overview'],
+      default: 'Executive Dashboard'
+    },
+    ticketStatus: {
+      type: String,
+      enum: ['All Statuses', 'PENDING', 'ASSIGNED', 'RESOLVED'],
+      default: 'All Statuses'
+    },
+    reportPeriod: {
+      type: String,
+      enum: ['Current Month', 'Last Month', 'Current Quarter', 'Current Year'],
+      default: 'Current Month'
+    },
+    autoRefresh: { type: Boolean, default: true }
+  },
   role: {
     type: String,
     default: 'resident'

@@ -1,8 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
+const { body } = require('express-validator');
 const Schedule = require('../models/Schedule');
 const memoryStore = require('../config/memoryStore');
+const { apiLimiter, sanitizeMongoDB, validateInput } = require('../middleware/securityMiddleware');
+const { protect, adminOnly } = require('../middleware/authMiddleware');
 
 // @route   GET /api/schedules
 // @desc    Get waste collection schedules
@@ -42,7 +45,19 @@ router.get('/', async (req, res) => {
 // @route   POST /api/schedules
 // @desc    Create a new waste collection schedule
 // @access  Public
-router.post('/', async (req, res) => {
+router.post('/', 
+  apiLimiter,
+  sanitizeMongoDB,
+  validateInput([
+    body('barangay').notEmpty().isString().trim().escape().withMessage('Barangay name is required'),
+    body('biodegradableDays').optional().isString().trim().escape(),
+    body('nonBiodegradableDays').optional().isString().trim().escape(),
+    body('timeSlot').optional().isString().trim().escape(),
+    body('assignedTruck').optional().isString().trim().escape()
+  ]),
+  protect,
+  adminOnly,
+  async (req, res) => {
   try {
     const { barangay, biodegradableDays, nonBiodegradableDays, timeSlot, assignedTruck } = req.body;
 
@@ -76,7 +91,18 @@ router.post('/', async (req, res) => {
 // @route   PUT /api/schedules/:id
 // @desc    Update an existing collection schedule
 // @access  Public
-router.put('/:id', async (req, res) => {
+router.put('/:id', 
+  apiLimiter,
+  sanitizeMongoDB,
+  validateInput([
+    body('biodegradableDays').optional().isString().trim().escape(),
+    body('nonBiodegradableDays').optional().isString().trim().escape(),
+    body('timeSlot').optional().isString().trim().escape(),
+    body('assignedTruck').optional().isString().trim().escape()
+  ]),
+  protect,
+  adminOnly,
+  async (req, res) => {
   try {
     const { biodegradableDays, nonBiodegradableDays, timeSlot, assignedTruck } = req.body;
     const schedule = await Schedule.findById(req.params.id);
@@ -105,7 +131,12 @@ router.put('/:id', async (req, res) => {
 // @route   DELETE /api/schedules/:id
 // @desc    Delete a schedule
 // @access  Public
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', 
+  apiLimiter,
+  sanitizeMongoDB,
+  protect,
+  adminOnly,
+  async (req, res) => {
   try {
     const schedule = await Schedule.findByIdAndDelete(req.params.id);
     if (!schedule) {

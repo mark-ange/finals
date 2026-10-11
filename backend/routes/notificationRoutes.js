@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
+const { body } = require('express-validator');
 const Notification = require('../models/Notification');
+const { apiLimiter, sanitizeMongoDB, validateInput } = require('../middleware/securityMiddleware');
+const { protect, adminOnly } = require('../middleware/authMiddleware');
 
 // @route   GET /api/notifications
 // @desc    Get notification history
@@ -22,7 +25,18 @@ router.get('/', async (req, res) => {
 // @route   POST /api/notifications
 // @desc    Trigger push alert / create notification
 // @access  Public
-router.post('/', async (req, res) => {
+router.post('/', 
+  apiLimiter,
+  sanitizeMongoDB,
+  validateInput([
+    body('title').notEmpty().isString().trim().escape().withMessage('Title is required'),
+    body('body').notEmpty().isString().trim().escape().withMessage('Body is required'),
+    body('type').optional().isString().trim().escape(),
+    body('user').optional().isString().trim().escape()
+  ]),
+  protect,
+  adminOnly,
+  async (req, res) => {
   try {
     const { title, body, type, user } = req.body;
 

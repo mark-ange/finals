@@ -1,0 +1,40 @@
+services:
+  - type: web
+    name: citycare-cdo-api
+    runtime: node
+    rootDir: backend
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: TRUST_PROXY
+        value: "1"
+      - key: MONGO_URI
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: ALLOWED_ORIGINS
+        value: https://citycare-cdo-admin.onrender.com
+      - key: API_RATE_LIMIT_MAX
+        value: "10000"
+      - key: REPORT_SUBMISSION_RATE_LIMIT_MAX
+        value: "1500"
+
+  - type: web
+    name: citycare-cdo-admin
+    runtime: static
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_URL
+        value: https://citycare-cdo-api.onrender.com/api
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

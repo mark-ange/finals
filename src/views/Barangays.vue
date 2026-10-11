@@ -5,6 +5,7 @@
       <div>
         <h1 class="page-title">Municipal Coverage & Barangay Matrix</h1>
         <p class="page-subtitle">Urban district monitoring, weekly garbage collection timetables, and incident density.</p>
+        <p v-if="errorMessage" class="text-red" role="alert">{{ errorMessage }}</p>
       </div>
 
       <button type="button" class="btn btn-primary" @click="openAddForm">
@@ -31,7 +32,7 @@
       </div>
 
       <div class="metric-card">
-        <span class="metric-label">RESOLVED THIS MONTH</span>
+        <span class="metric-label">RESOLVED REPORTS</span>
         <div class="metric-val text-green">{{ resolvedIncidents }}</div>
         <span class="metric-sub">Successfully cleared by CLENRO units</span>
       </div>
@@ -94,19 +95,19 @@
             </td>
             <td>
               <div v-if="getBarangaySchedule(b.name)" class="schedule-text">
-                <span class="days-text">{{ getBarangaySchedule(b.name).days.join(', ') }}</span>
-                <span class="time-text font-mono">{{ getBarangaySchedule(b.name).time }}</span>
+                <span class="days-text">{{ getBarangaySchedule(b.name).biodegradableDays }} / {{ getBarangaySchedule(b.name).nonBiodegradableDays }}</span>
+                <span class="time-text font-mono">{{ getBarangaySchedule(b.name).timeSlot }}</span>
               </div>
-              <span v-else class="text-muted">Mon, Wed, Fri (Regular)</span>
+              <span v-else class="text-muted">No collection schedule</span>
             </td>
             <td>
               <span v-if="getBarangaySchedule(b.name)" class="truck-pill font-mono">
-                {{ getBarangaySchedule(b.name).truck }}
+                {{ getBarangaySchedule(b.name).assignedTruck }}
               </span>
-              <span v-else class="truck-pill font-mono">CLENRO Truck #1</span>
+              <span v-else class="text-muted">Not assigned</span>
             </td>
             <td>
-              <span class="status-badge active-status">Active</span>
+              <span class="status-badge" :class="b.status === 'Active' ? 'active-status' : ''">{{ b.status }}</span>
             </td>
             <td class="text-right" @click.stop>
               <button class="action-btn" @click="viewBarangay(b)">
@@ -151,7 +152,7 @@
             </div>
             <div class="detail-item">
               <span class="item-label">District Status</span>
-              <strong class="item-val">Covered & Active</strong>
+              <strong class="item-val">{{ selectedBarangay.status }}</strong>
             </div>
           </div>
 
@@ -159,15 +160,15 @@
             <span class="schedule-box-title">Official Collection Timetable</span>
             <div class="schedule-box-row">
               <span>Collection Days:</span>
-              <strong>{{ getBarangaySchedule(selectedBarangay.name).days.join(', ') }}</strong>
+              <strong>{{ getBarangaySchedule(selectedBarangay.name).biodegradableDays }} / {{ getBarangaySchedule(selectedBarangay.name).nonBiodegradableDays }}</strong>
             </div>
             <div class="schedule-box-row">
               <span>Collection Window:</span>
-              <strong>{{ getBarangaySchedule(selectedBarangay.name).time }}</strong>
+              <strong>{{ getBarangaySchedule(selectedBarangay.name).timeSlot }}</strong>
             </div>
             <div class="schedule-box-row">
               <span>Primary Compactor Unit:</span>
-              <strong>{{ getBarangaySchedule(selectedBarangay.name).truck }}</strong>
+              <strong>{{ getBarangaySchedule(selectedBarangay.name).assignedTruck }}</strong>
             </div>
           </div>
 
@@ -200,6 +201,7 @@
             <select v-model="newBarangay.district" class="form-input select-input">
               <option>District 1</option>
               <option>District 2</option>
+              <option>District 3</option>
             </select>
           </div>
 
@@ -232,13 +234,14 @@ const newBarangay = ref({
 
 const barangays = ref([])
 const schedules = ref([])
+const errorMessage = ref('')
 
 async function loadBarangays() {
   try {
     isLoading.value = true
     const [bgRes, schRes] = await Promise.all([
       barangayApi.getAll(),
-      scheduleApi.getAll().catch(() => ({ data: [] }))
+      scheduleApi.getAll()
     ])
     if (bgRes && bgRes.data) {
       barangays.value = bgRes.data
@@ -246,8 +249,10 @@ async function loadBarangays() {
     if (schRes && schRes.data) {
       schedules.value = schRes.data
     }
+    errorMessage.value = ''
   } catch (err) {
     console.error('Failed to load barangays:', err)
+    errorMessage.value = err.message || 'Unable to load barangay data.'
   } finally {
     isLoading.value = false
   }
@@ -296,19 +301,18 @@ async function addBarangay() {
 
   const payload = {
     name: newBarangay.value.name.trim(),
-    district: newBarangay.value.district,
-    active: 0,
-    resolved: 0,
-    total: 0,
-    status: 'Active'
+    district: newBarangay.value.district
   }
 
   try {
-    await barangayApi.create(payload)
-  } catch {}
-
-  barangays.value.push(payload)
-  closeAddForm()
+    const response = await barangayApi.create(payload)
+    barangays.value.push(response.data)
+    errorMessage.value = ''
+    closeAddForm()
+  } catch (err) {
+    console.error('Failed to add barangay:', err)
+    errorMessage.value = err.message || 'Unable to add barangay.'
+  }
 }
 
 function goToTicketsForBarangay(name) {

@@ -5,6 +5,7 @@
       <div>
         <h1 class="page-title">Civic Analytics & Operational Reports</h1>
         <p class="page-subtitle">Turnaround benchmarks, district density distribution, and resolution performance for CLENRO.</p>
+        <p v-if="errorMessage" class="text-red" role="alert">{{ errorMessage }}</p>
       </div>
 
       <button type="button" class="btn btn-primary" @click="generateReport">
@@ -27,7 +28,7 @@
 
       <div class="metric-card">
         <span class="metric-label">AVERAGE TURNAROUND</span>
-        <div class="metric-val text-blue">{{ reportStats.avgResponse }} <span class="unit-text">hrs</span></div>
+        <div class="metric-val text-blue">{{ reportStats.avgResponse ?? '—' }} <span v-if="reportStats.avgResponse !== null" class="unit-text">hrs</span></div>
         <span class="metric-sub">Average time to vehicle dispatch</span>
       </div>
 
@@ -55,7 +56,7 @@
             :key="item.name"
             class="bar-group"
           >
-            <span class="bar-value font-mono">{{ item.value }}</span>
+            <span class="bar-value font-mono">{{ item.count }}</span>
             <div class="bar-slot">
               <div
                 class="bar-fill"
@@ -64,6 +65,7 @@
             </div>
             <span class="bar-label">Brgy. {{ item.name }}</span>
           </div>
+          <p v-if="barangayReports.length === 0" class="empty-state">No report data is available.</p>
         </div>
       </div>
 
@@ -90,6 +92,7 @@
               <div class="category-bar-fill" :style="{ width: `${cat.percent}%` }"></div>
             </div>
           </div>
+          <p v-if="categories.length === 0" class="empty-state">No category data is available.</p>
         </div>
       </div>
     </div>
@@ -99,12 +102,12 @@
       <div class="panel-header">
         <div>
           <h2 class="panel-title">Daily Response Speed Curve (Past 7 Days)</h2>
-          <span class="panel-subtitle">Average hours elapsed from citizen submission to truck arrival</span>
+          <span class="panel-subtitle">Average hours from submission to first dispatch assignment</span>
         </div>
       </div>
 
       <div class="timeline-chart-wrap">
-        <svg viewBox="0 0 700 240" class="timeline-svg" preserveAspectRatio="none">
+        <svg v-if="chartPoints.length" viewBox="0 0 700 240" class="timeline-svg" preserveAspectRatio="none">
           <defs>
             <linearGradient id="areaGradient" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stop-color="#10b981" stop-opacity="0.25"/>
@@ -144,8 +147,9 @@
         </svg>
 
         <div class="x-axis-row font-mono">
-          <span v-for="p in chartPoints" :key="p.label">{{ p.label }}</span>
+          <span v-for="p in responseTimes" :key="p.label">{{ p.label }}</span>
         </div>
+        <p v-if="!chartPoints.length" class="empty-state">No dispatch timing data has been recorded yet.</p>
       </div>
     </div>
   </div>
@@ -156,49 +160,35 @@ import { computed, ref, onMounted } from 'vue'
 import { dashboardApi } from '../services/api'
 
 const reportStats = ref({
-  totalReports: '6',
-  avgResponse: '3.8',
-  resolutionRate: '83.3%',
-  resolvedCount: 5,
-  totalCount: 6
+  totalReports: 0,
+  avgResponse: null,
+  resolutionRate: 0,
+  resolvedCount: 0,
+  totalCount: 0
 })
 
-const barangayReports = ref([
-  { name: 'Carmen', value: 3, height: 100 },
-  { name: 'Lapasan', value: 2, height: 66 },
-  { name: 'Macasandig', value: 2, height: 66 },
-  { name: 'Balulang', value: 1, height: 33 },
-  { name: 'Lumbia', value: 1, height: 33 }
-])
-
-const categories = [
-  { name: 'Waste Collection', percent: 45 },
-  { name: 'Illegal Dump Site', percent: 30 },
-  { name: 'Overflowing Bin', percent: 15 },
-  { name: 'Road & Drainage Waste', percent: 10 }
-]
-
-const responseTimes = [
-  { label: 'Mon', value: 3.4 },
-  { label: 'Tue', value: 4.1 },
-  { label: 'Wed', value: 3.8 },
-  { label: 'Thu', value: 2.9 },
-  { label: 'Fri', value: 3.5 },
-  { label: 'Sat', value: 4.2 },
-  { label: 'Sun', value: 3.1 }
-]
+const barangayReports = ref([])
+const categories = ref([])
+const responseTimes = ref([])
+const errorMessage = ref('')
 
 const chartPoints = computed(() => {
   const width = 700
   const height = 200
-  const maxVal = 6
-  const step = width / (responseTimes.length - 1)
+  const step = responseTimes.value.length > 1 ? width / (responseTimes.value.length - 1) : 0
+  const maxValue = Math.max(
+    ...responseTimes.value.filter(item => item.value !== null).map(item => item.value),
+    6
+  )
 
-  return responseTimes.map((item, index) => {
-    const x = Math.round(index * step)
-    const y = Math.round(height - (item.value / maxVal) * height) + 15
-    return { ...item, x, y }
-  })
+  return responseTimes.value
+    .map((item, index) => ({ ...item, index }))
+    .filter(item => item.value !== null)
+    .map(item => ({
+      ...item,
+      x: Math.round(item.index * step),
+      y: Math.round(height - (item.value / maxValue) * height) + 15
+    }))
 })
 
 const linePoints = computed(() => chartPoints.value.map(p => `${p.x},${p.y}`).join(' '))
@@ -215,23 +205,27 @@ async function loadAnalytics() {
     if (res && res.data) {
       const d = res.data
       reportStats.value = {
-        totalReports: String(d.totalTickets || 6),
-        avgResponse: '3.8',
-        resolutionRate: `${d.resolutionRate || 83.3}%`,
-        resolvedCount: d.resolved || 5,
-        totalCount: d.totalTickets || 6
+        totalReports: d.totalTickets,
+        avgResponse: d.avgResponse,
+        resolutionRate: `${d.resolutionRate}%`,
+        resolvedCount: d.resolved,
+        totalCount: d.totalTickets
       }
 
-      if (d.barangayStats && d.barangayStats.length > 0) {
-        const maxVal = Math.max(...d.barangayStats.map(b => b.count || 1), 1)
-        barangayReports.value = d.barangayStats.slice(0, 5).map(b => ({
-          name: b.name,
-          value: b.count,
-          height: Math.round((b.count / maxVal) * 100)
-        }))
-      }
+      const maxVal = Math.max(...d.barangayStats.map(b => b.count), 1)
+      barangayReports.value = d.barangayStats.map(b => ({
+        name: b.name,
+        count: b.count,
+        height: Math.round((b.count / maxVal) * 100)
+      }))
+      categories.value = d.categories
+      responseTimes.value = d.responseTimes
     }
-  } catch {}
+    errorMessage.value = ''
+  } catch (err) {
+    console.error('Failed to load report analytics:', err)
+    errorMessage.value = err.message || 'Unable to load report analytics.'
+  }
 }
 
 function generateReport() {

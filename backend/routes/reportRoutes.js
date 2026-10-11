@@ -1,8 +1,36 @@
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
+const { body, validationResult } = require('express-validator');
 const Report = require('../models/Report');
 const memoryStore = require('../config/memoryStore');
+const {
+  apiLimiter,
+  reportSubmissionLimiter,
+  sanitizeMongoDB,
+  validateInput
+} = require('../middleware/securityMiddleware');
+const { protect, adminOnly } = require('../middleware/authMiddleware');
+
+const REPORT_STATUSES = ['PENDING', 'ASSIGNED', 'IN_PROGRESS', 'RESOLVED', 'REJECTED'];
+const DEFAULT_REPORT_PAGE_SIZE = 1000;
+const MAX_REPORT_PAGE_SIZE = 1000;
+
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const normalizeStatus = (status) => {
+  const normalized = String(status || 'PENDING').toUpperCase().replace(/[\s-]+/g, '_');
+  return REPORT_STATUSES.includes(normalized) ? normalized : 'PENDING';
+};
+
+const normalizeStatusCounts = (counts) => {
+  const result = Object.fromEntries(REPORT_STATUSES.map(status => [status, 0]));
+  counts.forEach(({ _id, count }) => {
+    const status = normalizeStatus(_id);
+    result[status] += count;
+  });
+  return result;
+};
 
 // Helper to format report object for Vue frontend and Android client
 const formatReport = (report) => {
@@ -39,9 +67,10 @@ const formatReport = (report) => {
     category: doc.category || 'Waste Collection',
     media: Boolean(doc.photoUrl || doc.media),
     photoUrl: doc.photoUrl || '',
+    imageUrl: doc.photoUrl || '',
     status: (doc.status || 'PENDING').toUpperCase(),
     reporter: doc.reporter || 'Civic Resident',
-    userEmail: doc.userEmail || (doc.reporter ? `${doc.reporter.toLowerCase().replace(/[^a-z0-9]/g, '.')}@gmail.com` : 'resident@gmail.com'),
+    userEmail: doc.userEmail || '',
     description: doc.description || '',
     team: doc.team || '',
     personnel: doc.personnel || '',
@@ -57,59 +86,117 @@ const formatReport = (report) => {
 // @access  Public
 router.get('/', async (req, res) => {
   try {
-    const { search, district, barangay, category, status } = req.query;
+    const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+    const district = typeof req.query.district === 'string' ? req.query.district.trim() : '';
+    const barangay = typeof req.query.barangay === 'string' ? req.query.barangay.trim() : '';
+    const category = typeof req.query.category === 'string' ? req.query.category.trim() : '';
+    const status = typeof req.query.status === 'string' ? req.query.status.trim() : '';
+    const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(
+      MAX_REPORT_PAGE_SIZE,
+      Math.max(1, Number.parseInt(req.query.limit, 10) || DEFAULT_REPORT_PAGE_SIZE)
+    );
 
     if (mongoose.connection.readyState === 1) {
       let query = {};
-      if (barangay && barangay.trim()) query.barangay = new RegExp(barangay.trim(), 'i');
-      if (district && district.trim()) query.district = district.trim();
-      if (category && category.trim()) query.category = new RegExp(category.trim(), 'i');
-      if (status && status.trim()) query.status = new RegExp(`^${status.trim()}$`, 'i');
+      if (barangay) query.barangay = new RegExp(escapeRegex(barangay), 'i');
+      if (district) query.district = new RegExp(`^${escapeRegex(district)}$`, 'i');
+      if (category) query.category = new RegExp(`^${escapeRegex(category)}$`, 'i');
+      if (status) {
+        const normalizedStatus = normalizeStatus(status);
+        query.status = normalizedStatus === 'IN_PROGRESS'
+          ? /^in[\s_-]?progress$/i
+          : new RegExp(`^${escapeRegex(normalizedStatus)}$`, 'i');
+      }
 
-      if (search && search.trim()) {
-        const term = search.trim();
+      if (search) {
+        const term = new RegExp(escapeRegex(search), 'i');
         query.$or = [
-          { reportId: new RegExp(term, 'i') },
-          { title: new RegExp(term, 'i') },
-          { description: new RegExp(term, 'i') },
-          { barangay: new RegExp(term, 'i') },
-          { landmark: new RegExp(term, 'i') },
-          { reporter: new RegExp(term, 'i') }
+          { reportId: term },
+          { title: term },
+          { description: term },
+          { barangay: term },
+          { landmark: term },
+          { reporter: term },
+          { userEmail: term },
+          { category: term },
+          { gpsCoordinates: term },
+          { unitAssigned: term }
         ];
       }
 
-      const reports = await Report.find(query).sort({ createdAt: -1 });
+      const [reports, total, statusGroups, filteredStatusGroups, categories] = await Promise.all([
+        Report.find(query).sort({ createdAt: -1, _id: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+        Report.countDocuments(query),
+        Report.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]),
+        Report.aggregate([{ $match: query }, { $group: { _id: '$status', count: { $sum: 1 } } }]),
+        Report.distinct('category')
+      ]);
       const formatted = reports.map(formatReport);
-      return res.json({ success: true, count: formatted.length, data: formatted });
+      return res.json({
+        success: true,
+        count: formatted.length,
+        total,
+        filteredTotal: total,
+        page,
+        limit,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+        statusCounts: normalizeStatusCounts(statusGroups),
+        filteredStatusCounts: normalizeStatusCounts(filteredStatusGroups),
+        categories: categories.filter(Boolean).sort(),
+        data: formatted
+      });
     }
 
     // Fallback if MongoDB is offline
     let list = memoryStore.reports;
-    if (barangay && barangay.trim()) {
-      list = list.filter(r => r.barangay.toLowerCase() === barangay.trim().toLowerCase());
+    if (barangay) {
+      list = list.filter(r => (r.barangay || '').toLowerCase() === barangay.toLowerCase());
     }
-    if (district && district.trim()) {
-      list = list.filter(r => (r.district || '').toLowerCase() === district.trim().toLowerCase());
+    if (district) {
+      list = list.filter(r => (r.district || '').toLowerCase() === district.toLowerCase());
     }
-    if (category && category.trim()) {
-      list = list.filter(r => (r.category || '').toLowerCase() === category.trim().toLowerCase());
+    if (category) {
+      list = list.filter(r => (r.category || '').toLowerCase() === category.toLowerCase());
     }
-    if (status && status.trim()) {
-      list = list.filter(r => (r.status || '').toLowerCase() === status.trim().toLowerCase());
+    if (status) {
+      list = list.filter(r => normalizeStatus(r.status) === normalizeStatus(status));
     }
-    if (search && search.trim()) {
-      const term = search.trim().toLowerCase();
+    if (search) {
+      const term = search.toLowerCase();
       list = list.filter(r =>
         (r.reportId || '').toLowerCase().includes(term) ||
         (r.title || '').toLowerCase().includes(term) ||
         (r.description || '').toLowerCase().includes(term) ||
         (r.barangay || '').toLowerCase().includes(term) ||
+        (r.userEmail || '').toLowerCase().includes(term) ||
         (r.reporter || '').toLowerCase().includes(term)
       );
     }
 
-    const formatted = list.map(formatReport);
-    res.json({ success: true, count: formatted.length, data: formatted });
+    const start = (page - 1) * limit;
+    const formatted = list
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      .slice(start, start + limit)
+      .map(formatReport);
+    const statusCounts = list.reduce((counts, report) => {
+      const normalizedStatus = normalizeStatus(report.status);
+      counts[normalizedStatus] += 1;
+      return counts;
+    }, Object.fromEntries(REPORT_STATUSES.map(value => [value, 0])));
+    res.json({
+      success: true,
+      count: formatted.length,
+      total: list.length,
+      filteredTotal: list.length,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(list.length / limit)),
+      statusCounts,
+      filteredStatusCounts: statusCounts,
+      categories: [...new Set(memoryStore.reports.map(report => report.category).filter(Boolean))].sort(),
+      data: formatted
+    });
   } catch (error) {
     console.error('Fetch Reports Error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -142,34 +229,54 @@ router.get('/:id', async (req, res) => {
 // @route   POST /api/reports
 // @desc    Create a new incident report (Mobile App & Web Portal)
 // @access  Public
-router.post('/', async (req, res) => {
+router.post('/',
+  reportSubmissionLimiter,
+  sanitizeMongoDB,
+  validateInput([
+    body('title').optional().isString().trim().escape(),
+    body('category').optional().isString().trim().escape(),
+    body('barangay').optional().isString().trim().escape(),
+    body('district').optional().isString().trim().escape(),
+    body('purokZone').optional().isString().trim().escape(),
+    body('landmark').optional().isString().trim().escape(),
+    body('description').optional().isString().trim().escape(),
+    body('gpsCoordinates').optional().isString().trim(),
+    body('photoUrl').optional().isString().trim().isLength({ max: 2048 }).matches(/^https?:\/\/\S+$/i),
+    body('imageUrl').optional().isString().trim().isLength({ max: 2048 }).matches(/^https?:\/\/\S+$/i),
+    body('photoEvidenceUrl').optional().isString().trim().isLength({ max: 2048 }).matches(/^https?:\/\/\S+$/i),
+    body('media').optional().isBoolean().toBoolean(),
+    body('reporter').optional().isString().trim().escape(),
+    body('userEmail').optional().isEmail().normalizeEmail(),
+    body('email').optional().isEmail().normalizeEmail()
+  ]),
+  async (req, res) => {
   try {
     const {
       title, category, barangay, district, purokZone,
-      landmark, description, gpsCoordinates, photoUrl,
-      media, reporter, status
+      landmark, description, gpsCoordinates, photoUrl, imageUrl,
+      photoEvidenceUrl, media, reporter, userEmail, email
     } = req.body;
 
-    const generatedId = `#CDO-2026-${Math.floor(1000 + Math.random() * 9000)}`;
+    const evidenceUrl = photoUrl || imageUrl || photoEvidenceUrl || '';
 
     const reportData = {
-      reportId: generatedId,
       title: title || `Brgy. ${barangay || 'Carmen'}, ${purokZone || 'Zone 1'}`,
       category: category || 'Waste Collection',
       barangay: barangay || 'Carmen',
       district: district || 'District 1',
       purokZone: purokZone || 'Purok 1',
       landmark: landmark || '',
-      status: status || 'Pending',
+      status: 'Pending',
       description: description || 'Civic issue reported by resident.',
       gpsCoordinates: gpsCoordinates || '8.4822° N, 124.6175° E',
       unitAssigned: 'Unassigned',
       team: '',
       personnel: '',
       notes: '',
-      photoUrl: photoUrl || '',
-      media: Boolean(photoUrl || media),
+      photoUrl: evidenceUrl,
+      media: Boolean(evidenceUrl || media),
       reporter: reporter || 'Resident Reporter',
+      userEmail: userEmail || email || '',
       createdAt: new Date()
     };
 
@@ -201,7 +308,18 @@ router.post('/', async (req, res) => {
 // @route   PUT /api/reports/:id/dispatch
 // @desc    Dispatch team and personnel to an incident report
 // @access  Public
-router.put('/:id/dispatch', async (req, res) => {
+router.put('/:id/dispatch',
+  apiLimiter,
+  sanitizeMongoDB,
+  validateInput([
+    body('team').optional().isString().trim().escape(),
+    body('personnel').optional().isString().trim().escape(),
+    body('notes').optional().isString().trim().escape(),
+    body('status').optional().isIn(['Pending', 'Assigned', 'In Progress', 'Resolved', 'Rejected', 'PENDING', 'ASSIGNED', 'IN_PROGRESS', 'RESOLVED', 'REJECTED'])
+  ]),
+  protect,
+  adminOnly,
+  async (req, res) => {
   try {
     const param = req.params.id;
     const { team, personnel, notes, status } = req.body;
@@ -220,6 +338,9 @@ router.put('/:id/dispatch', async (req, res) => {
       if (notes !== undefined) report.notes = notes;
       if (team) report.unitAssigned = team;
       report.status = status || 'Assigned';
+      if (!report.assignedAt && ['assigned', 'in progress'].includes(report.status.toLowerCase().replace(/_/g, ' '))) {
+        report.assignedAt = new Date();
+      }
 
       await report.save();
 
@@ -238,6 +359,9 @@ router.put('/:id/dispatch', async (req, res) => {
     if (notes !== undefined) report.notes = notes;
     if (team) report.unitAssigned = team;
     report.status = status || 'Assigned';
+    if (!report.assignedAt && ['assigned', 'in progress'].includes(report.status.toLowerCase().replace(/_/g, ' '))) {
+      report.assignedAt = new Date();
+    }
 
     res.json({
       success: true,
@@ -253,7 +377,19 @@ router.put('/:id/dispatch', async (req, res) => {
 // @route   PUT /api/reports/:id/status
 // @desc    Update report status and assignment
 // @access  Public
-router.put('/:id/status', async (req, res) => {
+router.put('/:id/status',
+  apiLimiter,
+  sanitizeMongoDB,
+  validateInput([
+    body('status').optional().isIn(['Pending', 'Assigned', 'In Progress', 'Resolved', 'Rejected', 'PENDING', 'ASSIGNED', 'IN_PROGRESS', 'RESOLVED', 'REJECTED']),
+    body('unitAssigned').optional().isString().trim().escape(),
+    body('team').optional().isString().trim().escape(),
+    body('personnel').optional().isString().trim().escape(),
+    body('notes').optional().isString().trim().escape()
+  ]),
+  protect,
+  adminOnly,
+  async (req, res) => {
   try {
     const rawParam = req.params.id;
     const decodedParam = decodeURIComponent(rawParam);
@@ -279,6 +415,9 @@ router.put('/:id/status', async (req, res) => {
       }
 
       if (status) report.status = status;
+      if (!report.assignedAt && status && ['assigned', 'in progress'].includes(status.toLowerCase().replace(/_/g, ' '))) {
+        report.assignedAt = new Date();
+      }
       if (unitAssigned) report.unitAssigned = unitAssigned;
       if (team) report.team = team;
       if (personnel) report.personnel = personnel;
@@ -299,6 +438,9 @@ router.put('/:id/status', async (req, res) => {
     if (!report) return res.status(404).json({ success: false, message: `Report "${rawParam}" not found` });
 
     if (status) report.status = status;
+    if (!report.assignedAt && status && ['assigned', 'in progress'].includes(status.toLowerCase().replace(/_/g, ' '))) {
+      report.assignedAt = new Date();
+    }
     if (unitAssigned) report.unitAssigned = unitAssigned;
     if (team) report.team = team;
     if (personnel) report.personnel = personnel;
@@ -318,7 +460,12 @@ router.put('/:id/status', async (req, res) => {
 // @route   DELETE /api/reports/:id
 // @desc    Delete or reject a report
 // @access  Public
-router.delete('/:id', async (req, res) => {
+router.delete('/:id',
+  apiLimiter,
+  sanitizeMongoDB,
+  protect,
+  adminOnly,
+  async (req, res) => {
   try {
     const param = req.params.id;
 

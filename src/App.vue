@@ -146,7 +146,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { reportsApi, getCurrentUser } from './services/api'
+import { authApi, dashboardApi, getAuthToken, getAuthTokenExpiration } from './services/api'
 
 const route = useRoute()
 const router = useRouter()
@@ -177,8 +177,29 @@ watch(theme, () => {
 })
 
 const currentUser = ref({
-  fullName: 'Admin',
-  role: 'Administrator'
+  fullName: '',
+  role: ''
+})
+
+async function loadAdminProfile() {
+  if (!getAuthToken()) return
+  try {
+    const response = await authApi.getProfile()
+    currentUser.value = response.data
+  } catch (err) {
+    console.error('Failed to load administrator profile:', err)
+  }
+}
+
+watch(() => route.path, () => {
+  if (getAuthToken()) {
+    loadAdminProfile()
+    fetchStats()
+    if (!pollTimer) pollTimer = setInterval(fetchStats, 10000)
+  } else if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
 })
 
 const userInitials = computed(() => {
@@ -201,11 +222,10 @@ function updateClock() {
 
 async function fetchStats() {
   try {
-    const res = await reportsApi.getAll()
-    const reports = res.data || []
-    pendingCount.value = reports.filter(r => (r.status || '').toUpperCase() === 'PENDING').length
+    const response = await dashboardApi.getStats()
+    pendingCount.value = response.data.pending
   } catch (err) {
-    // Quiet background update
+    console.error('Failed to refresh pending report count:', err)
   }
 }
 
@@ -216,22 +236,48 @@ function handleSearch() {
 }
 
 function handleLogout() {
-  localStorage.removeItem('citycare_admin_token')
-  localStorage.removeItem('user')
+  authApi.logout()
+  
+  // Clear any session data
+  sessionStorage.clear()
+  
   router.push('/login')
 }
 
-onMounted(() => {
-  const user = getCurrentUser()
-  if (user) {
-    currentUser.value = { ...currentUser.value, ...user }
-  }
+// Security: Auto-logout on token expiration
+const checkTokenExpiration = () => {
+  const token = localStorage.getItem('citycare_admin_token')
+  if (token) {
+    const expirationTime = getAuthTokenExpiration()
+    if (!expirationTime) {
+      handleLogout()
+      return true
+    }
 
+    const timeRemaining = expirationTime - Date.now()
+    if (timeRemaining <= 5 * 60 * 1000) {
+      console.warn('Session will expire soon')
+    }
+  }
+  return false
+}
+
+// Check token every minute
+let tokenCheckInterval = null
+
+onMounted(() => {
   updateClock()
   clockTimer = setInterval(updateClock, 1000)
 
-  fetchStats()
-  pollTimer = setInterval(fetchStats, 10000)
+  if (getAuthToken()) {
+    loadAdminProfile()
+    fetchStats()
+    pollTimer = setInterval(fetchStats, 10000)
+  }
+  
+  // Start token expiration check
+  checkTokenExpiration()
+  tokenCheckInterval = setInterval(checkTokenExpiration, 60000)
   
   updateHtmlTheme()
 })
@@ -239,6 +285,7 @@ onMounted(() => {
 onUnmounted(() => {
   if (clockTimer) clearInterval(clockTimer)
   if (pollTimer) clearInterval(pollTimer)
+  if (tokenCheckInterval) clearInterval(tokenCheckInterval)
 })
 </script>
 

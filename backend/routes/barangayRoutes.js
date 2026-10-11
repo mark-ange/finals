@@ -1,9 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
+const { body } = require('express-validator');
 const Barangay = require('../models/Barangay');
 const Report = require('../models/Report');
 const memoryStore = require('../config/memoryStore');
+const { apiLimiter, sanitizeMongoDB, validateInput } = require('../middleware/securityMiddleware');
+const { protect, adminOnly } = require('../middleware/authMiddleware');
 
 // @route   GET /api/barangays
 // @desc    Get all barangays with live incident metrics calculated from reports
@@ -95,7 +98,18 @@ router.get('/', async (req, res) => {
 // @route   POST /api/barangays
 // @desc    Add a new barangay
 // @access  Public
-router.post('/', async (req, res) => {
+router.post('/', 
+  apiLimiter,
+  sanitizeMongoDB,
+  validateInput([
+    body('name').notEmpty().isString().trim().escape().withMessage('Barangay name is required'),
+    body('district').optional().isString().trim().escape(),
+    body('teams').optional().isNumeric().withMessage('Teams must be a number'),
+    body('status').optional().isString().trim().escape()
+  ]),
+  protect,
+  adminOnly,
+  async (req, res) => {
   try {
     const { name, district, teams, status } = req.body;
 
@@ -140,7 +154,18 @@ router.post('/', async (req, res) => {
 // @route   PUT /api/barangays/:id
 // @desc    Update barangay
 // @access  Public
-router.put('/:id', async (req, res) => {
+router.put('/:id', 
+  apiLimiter,
+  sanitizeMongoDB,
+  validateInput([
+    body('name').optional().isString().trim().escape(),
+    body('district').optional().isString().trim().escape(),
+    body('teams').optional().isNumeric().withMessage('Teams must be a number'),
+    body('status').optional().isString().trim().escape()
+  ]),
+  protect,
+  adminOnly,
+  async (req, res) => {
   try {
     const { name, district, teams, status } = req.body;
     const bg = await Barangay.findById(req.params.id);
@@ -169,7 +194,12 @@ router.put('/:id', async (req, res) => {
 // @route   DELETE /api/barangays/:id
 // @desc    Delete barangay
 // @access  Public
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', 
+  apiLimiter,
+  sanitizeMongoDB,
+  protect,
+  adminOnly,
+  async (req, res) => {
   try {
     const bg = await Barangay.findByIdAndDelete(req.params.id);
     if (!bg) {

@@ -3,32 +3,113 @@
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
-// Helper to retrieve token from localStorage
-export const getAuthToken = () => {
-  return localStorage.getItem('citycare_admin_token') || '';
+const getTokenPayload = (token) => {
+  try {
+    const segments = token.split('.');
+    if (segments.length !== 3 || segments.some((segment) => !segment)) return null;
+    const encodedPayload = segments[1];
+
+    const base64 = encodedPayload
+      .replace(/-/g, '+')
+      .replace(/_/g, '/')
+      .padEnd(Math.ceil(encodedPayload.length / 4) * 4, '=');
+    return JSON.parse(atob(base64));
+  } catch {
+    return null;
+  }
 };
 
-// Helper to set session
-export const setAuthSession = (token, user) => {
-  if (token) localStorage.setItem('citycare_admin_token', token);
-  if (user) localStorage.setItem('citycare_admin_user', JSON.stringify(user));
+// Helper to retrieve token from localStorage with validation
+export const getAuthToken = () => {
+  const token = localStorage.getItem('citycare_admin_token') || '';
+  if (!token) return '';
+
+  const payload = getTokenPayload(token);
+  if (!payload || !Number.isFinite(payload.exp) || Date.now() >= payload.exp * 1000) {
+    clearAuthSession();
+    return '';
+  }
+
+  return token;
+};
+
+// Helper to validate token without clearing session (for silent checks)
+export const isTokenValid = () => {
+  const token = localStorage.getItem('citycare_admin_token') || '';
+  
+  if (!token) return false;
+  
+  const payload = getTokenPayload(token);
+  return Boolean(payload && Number.isFinite(payload.exp) && Date.now() < payload.exp * 1000);
+};
+
+export const getAuthTokenExpiration = () => {
+  const token = getAuthToken();
+  if (!token) return null;
+
+  const payload = getTokenPayload(token);
+  return payload ? payload.exp * 1000 : null;
+};
+
+// Helper to set session with expiration check
+export const setAuthSession = (token, refreshToken = null) => {
+  localStorage.removeItem('citycare_admin_user');
+  localStorage.removeItem('user');
+  if (token) {
+    localStorage.setItem('citycare_admin_token', token);
+    
+    // Calculate expiration time from token
+    const payload = getTokenPayload(token);
+    if (!payload || !Number.isFinite(payload.exp)) {
+      clearAuthSession();
+      return;
+    }
+
+  }
+  
+  if (refreshToken) {
+    localStorage.setItem('citycare_refresh_token', refreshToken);
+  }
 };
 
 // Helper to clear session
 export const clearAuthSession = () => {
   localStorage.removeItem('citycare_admin_token');
   localStorage.removeItem('citycare_admin_user');
+  localStorage.removeItem('user');
+  localStorage.removeItem('citycare_refresh_token');
+  localStorage.removeItem('citycare_session_expires');
 };
 
-// Helper to get currently logged in user info
-export const getCurrentUser = () => {
-  try {
-    const raw = localStorage.getItem('citycare_admin_user');
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
+// Input sanitization helper
+function sanitizeInput(input) {
+  if (input === null || input === undefined) return input;
+  
+  if (typeof input === 'string') {
+    // Remove potential XSS and injection patterns
+    return input
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#x27;')
+      .replace(/javascript:/gi, '')
+      .replace(/on\w+\s*=/gi, '');
   }
-};
+  
+  if (typeof input === 'object') {
+    if (Array.isArray(input)) {
+      return input.map(sanitizeInput);
+    }
+    
+    const result = {};
+    for (const key in input) {
+      result[key] = sanitizeInput(input[key]);
+    }
+    return result;
+  }
+  
+  return input;
+}
 
 // Generic fetch wrapper with headers and error handling
 async function request(endpoint, options = {}) {
@@ -41,14 +122,31 @@ async function request(endpoint, options = {}) {
     ...(options.headers || {})
   };
 
-  const config = {
+  // Sanitize request body
+  let config = {
     ...options,
     headers
   };
+  
+  if (config.body && typeof config.body === 'object') {
+    config = {
+      ...config,
+      body: JSON.stringify(sanitizeInput(JSON.parse(config.body)))
+    };
+  }
 
   try {
     const response = await fetch(url, config);
     const data = await response.json().catch(() => null);
+
+    const isAuthenticationRequest = /^\/auth\/(login|admin-login|register|register-resident)$/.test(endpoint);
+
+    // A rejected login is a credential error, not an expired authenticated session.
+    if (response.status === 401 && !isAuthenticationRequest) {
+      clearAuthSession();
+      window.location.href = '/login';
+      return null;
+    }
 
     if (!response.ok) {
       const errorMsg = (data && data.message) || `Request failed with status ${response.status}`;
@@ -61,6 +159,12 @@ async function request(endpoint, options = {}) {
     return data;
   } catch (error) {
     console.error(`API Error on [${options.method || 'GET'} ${endpoint}]:`, error.message);
+    
+    // Network errors
+    if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
+      console.error('Network error - please check your connection');
+    }
+    
     throw error;
   }
 }
@@ -76,7 +180,19 @@ export const authApi = {
       body: JSON.stringify(credentials)
     });
     if (res.token) {
-      setAuthSession(res.token, res.user);
+      setAuthSession(res.token);
+    }
+    return res;
+  },
+
+  // POST /api/auth/admin-login
+  adminLogin: async (credentials) => {
+    const res = await request('/auth/admin-login', {
+      method: 'POST',
+      body: JSON.stringify(credentials)
+    });
+    if (res.token) {
+      setAuthSession(res.token);
     }
     return res;
   },
@@ -92,6 +208,21 @@ export const authApi = {
       method: 'PUT',
       body: JSON.stringify(profileData)
     });
+  },
+
+  getSettings: async () => {
+    return await request('/auth/settings');
+  },
+
+  updateSettings: async (settings) => {
+    return await request('/auth/settings', {
+      method: 'PUT',
+      body: JSON.stringify(settings)
+    });
+  },
+
+  resetSettings: async () => {
+    return await request('/auth/settings/reset', { method: 'POST' });
   },
 
   logout: () => {
@@ -111,6 +242,8 @@ export const reportsApi = {
     if (filters.search) params.append('search', filters.search);
     if (filters.category) params.append('category', filters.category);
     if (filters.district) params.append('district', filters.district);
+    if (filters.page) params.append('page', filters.page);
+    if (filters.limit) params.append('limit', filters.limit);
 
     const queryStr = params.toString() ? `?${params.toString()}` : '';
     const res = await request(`/reports${queryStr}`);

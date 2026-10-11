@@ -20,10 +20,10 @@
               <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
               <polyline points="22,6 12,13 2,6"/>
             </svg>
-            <input 
-              v-model="email" 
-              type="email" 
-              placeholder="admin@clenro-cdo.gov.ph"
+            <input
+              v-model="email"
+              type="email"
+              placeholder="Enter email"
               required 
             />
           </div>
@@ -49,7 +49,7 @@
               <line x1="12" y1="12" x2="12" y2="12"/>
               <line x1="18" y1="12" x2="18" y2="12"/>
             </svg>
-            <input v-model="securityPin" type="password" placeholder="1234" required />
+            <input v-model="securityPin" type="password" placeholder="Enter security PIN" required />
           </div>
         </div>
 
@@ -60,13 +60,6 @@
           <span v-else>Sign In</span>
         </button>
       </form>
-
-      <button class="demo-fill" @click="fillAdminCredentials">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14">
-          <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
-        </svg>
-        Use Demo Credentials
-      </button>
 
       <div class="login-footer">
         <span>City Local Environment & Natural Resources Office</span>
@@ -79,23 +72,16 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { authApi } from '../services/api'
+import { authApi, getAuthToken } from '../services/api'
 
 const router = useRouter()
 
 const theme = ref(localStorage.getItem('theme') || 'dark')
-const email = ref('admin@clenro-cdo.gov.ph')
+const email = ref('')
 const password = ref('')
-const securityPin = ref('1234')
+const securityPin = ref('')
 const isLoading = ref(false)
 const errorMessage = ref('')
-
-function fillAdminCredentials() {
-  email.value = 'admin@clenro-cdo.gov.ph'
-  password.value = 'admin123'
-  securityPin.value = '1234'
-  errorMessage.value = ''
-}
 
 async function login() {
   errorMessage.value = ''
@@ -113,8 +99,7 @@ async function login() {
     await authApi.adminLogin({
       email: cleanEmail,
       password: cleanPass,
-      securityPin: cleanPin,
-      role: 'CLENRO Central Admin'
+      securityPin: cleanPin
     })
     router.push('/dashboard')
   } catch (err) {
@@ -126,7 +111,7 @@ async function login() {
 
 onMounted(() => {
   document.documentElement.setAttribute('data-theme', theme.value)
-  if (localStorage.getItem('citycare_admin_token')) {
+  if (getAuthToken()) {
     router.push('/dashboard')
   }
 })

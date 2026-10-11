@@ -4,8 +4,7 @@ const reportSchema = new mongoose.Schema({
   reportId: {
     type: String,
     required: true,
-    unique: true,
-    default: () => `#CDO-2026-${Math.floor(1000 + Math.random() * 9000)}`
+    unique: true
   },
   title: {
     type: String,
@@ -37,6 +36,10 @@ const reportSchema = new mongoose.Schema({
     enum: ['Pending', 'Assigned', 'In Progress', 'Resolved', 'Rejected', 'PENDING', 'ASSIGNED', 'IN_PROGRESS', 'RESOLVED', 'REJECTED'],
     default: 'Pending'
   },
+  assignedAt: {
+    type: Date,
+    default: null
+  },
   description: {
     type: String,
     default: ''
@@ -65,9 +68,14 @@ const reportSchema = new mongoose.Schema({
     type: String,
     default: 'Resident Reporter'
   },
-  photoUrl: {
+  userEmail: {
     type: String,
     default: ''
+  },
+  photoUrl: {
+    type: String,
+    default: '',
+    maxlength: 2048
   },
   media: {
     type: Boolean,
@@ -80,5 +88,16 @@ const reportSchema = new mongoose.Schema({
 }, {
   timestamps: true
 });
+
+reportSchema.pre('validate', function(next) {
+  if (!this.reportId) {
+    this.reportId = `#CDO-${new Date(this.createdAt || Date.now()).getFullYear()}-${this._id.toString().toUpperCase()}`;
+  }
+  next();
+});
+
+reportSchema.index({ createdAt: -1 });
+reportSchema.index({ status: 1, createdAt: -1 });
+reportSchema.index({ barangay: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Report', reportSchema);

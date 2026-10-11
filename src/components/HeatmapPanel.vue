@@ -1,9 +1,30 @@
 <script setup>
+import { computed } from 'vue'
+
 const props = defineProps({
   barangayStats: {
     type: Array,
     default: () => []
   }
+})
+
+const positions = [
+  { top: '32%', left: '55%', labelTop: '25%', labelLeft: '25%' },
+  { top: '43%', left: '62%', labelTop: '40%', labelLeft: '57%' },
+  { top: '51%', left: '48%', labelTop: '68%', labelLeft: '65%' },
+  { top: '65%', left: '67%', labelTop: '72%', labelLeft: '35%' },
+  { top: '25%', left: '70%', labelTop: '18%', labelLeft: '72%' },
+  { top: '58%', left: '38%', labelTop: '60%', labelLeft: '15%' }
+]
+
+const displayedStats = computed(() => {
+  const maximum = Math.max(...props.barangayStats.map(item => item.count || 0), 1)
+  return props.barangayStats.slice(0, positions.length).map((item, index) => ({
+    ...item,
+    position: positions[index],
+    color: item.count / maximum >= 0.75 ? '#e5484d' : item.count / maximum >= 0.4 ? '#f79009' : '#65a30d',
+    opacity: Math.max(0.25, item.count / maximum)
+  }))
 })
 </script>
 
@@ -16,36 +37,23 @@ const props = defineProps({
         <p>Incident density across Cagayan de Oro.</p>
       </div>
 
-      <div class="filters">
-        <select>
-          <option>All Districts</option>
-          <option>District 1</option>
-          <option>District 2</option>
-          <option>District 3</option>
-        </select>
-      </div>
     </div>
 
     <div class="map-area">
-
-      <!-- Temporary map representation -->
       <div class="map-background">
-
-        <div class="map-label label-1">Carmen</div>
-        <div class="map-label label-2">Lapasan</div>
-        <div class="map-label label-3">Macasandig</div>
-        <div class="map-label label-4">Kauswagan</div>
-
-        <div class="heat heat-1"></div>
-        <div class="heat heat-2"></div>
-        <div class="heat heat-3"></div>
-        <div class="heat heat-4"></div>
-        <div class="heat heat-5"></div>
-        <div class="heat heat-6"></div>
-
+        <template v-for="item in displayedStats" :key="item.name">
+          <div class="map-label" :style="{ top: item.position.labelTop, left: item.position.labelLeft }">
+            {{ item.name }}
+          </div>
+          <div
+            class="heat"
+            :style="{ top: item.position.top, left: item.position.left, background: item.color, opacity: item.opacity }"
+            :title="`${item.count} reports in ${item.name}`"
+          ></div>
+        </template>
       </div>
 
-      <div class="legend">
+      <div v-if="displayedStats.length" class="legend">
         <strong>Incident Density</strong>
 
         <span>
@@ -63,6 +71,7 @@ const props = defineProps({
           Low
         </span>
       </div>
+      <div v-if="!displayedStats.length" class="map-empty">No report data is available.</div>
 
     </div>
 
@@ -98,24 +107,6 @@ const props = defineProps({
   margin: 4px 0 0;
   font-size: 10px;
   color: #98a2b3;
-}
-
-.filters {
-  display: flex;
-  gap: 7px;
-}
-
-.filters select {
-  height: 29px;
-  padding: 0 8px;
-
-  border: 1px solid #d0d5dd;
-  border-radius: 4px;
-
-  background: white;
-  color: #475467;
-
-  font-size: 10px;
 }
 
 /* Map */
@@ -175,42 +166,6 @@ const props = defineProps({
   filter: blur(8px);
 }
 
-.heat-1 {
-  top: 32%;
-  left: 55%;
-  background: #e5484d;
-}
-
-.heat-2 {
-  top: 43%;
-  left: 62%;
-  background: #f79009;
-}
-
-.heat-3 {
-  top: 51%;
-  left: 48%;
-  background: #e5484d;
-}
-
-.heat-4 {
-  top: 65%;
-  left: 67%;
-  background: #f79009;
-}
-
-.heat-5 {
-  top: 25%;
-  left: 70%;
-  background: #f5c542;
-}
-
-.heat-6 {
-  top: 58%;
-  left: 38%;
-  background: #65a30d;
-}
-
 /* Labels */
 
 .map-label {
@@ -226,24 +181,13 @@ const props = defineProps({
   color: #475467;
 }
 
-.label-1 {
-  top: 25%;
-  left: 25%;
-}
-
-.label-2 {
-  top: 40%;
-  left: 57%;
-}
-
-.label-3 {
-  top: 68%;
-  left: 65%;
-}
-
-.label-4 {
-  top: 72%;
-  left: 35%;
+.map-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #667085;
+  font-size: 12px;
 }
 
 /* Legend */

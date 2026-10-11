@@ -5,6 +5,9 @@
       <div>
         <h1 class="page-title">Waste Incident Reports & Dispatch</h1>
         <p class="page-subtitle">Real-time incident feed from citizen mobile submissions with remote unit dispatch control.</p>
+        <p v-if="reportsError" class="text-red" role="alert">{{ reportsError }}</p>
+        <p v-if="barangaysError" class="text-red" role="alert">{{ barangaysError }}</p>
+        <p v-if="fleetError" class="text-red" role="alert">{{ fleetError }}</p>
       </div>
 
       <div class="header-actions">
@@ -110,7 +113,27 @@
           ></div>
         </div>
       </div>
+
+      <div
+        class="counter-tab status-rejected"
+        :class="{ active: activeStatusFilter === 'REJECTED' }"
+        @click="setStatusFilter('REJECTED')"
+      >
+        <div class="counter-header">
+          <span class="counter-name">REJECTED</span>
+          <span class="count-number">{{ rejectedCount }}</span>
+        </div>
+        <div class="counter-progress-bg">
+          <div
+            class="counter-progress-fill"
+            :style="{ width: `${totalCount ? (rejectedCount / totalCount) * 100 : 0}%` }"
+          ></div>
+        </div>
+      </div>
     </div>
+    <p v-if="activeStatusFilter || search || barangay || category" class="filter-summary">
+      {{ filteredTotalCount }} {{ filteredTotalCount === 1 ? 'report' : 'reports' }} match the current filters.
+    </p>
 
     <!-- Filter Bar -->
     <div class="table-filter-bar">
@@ -128,14 +151,7 @@
 
       <select v-model="barangay" class="filter-select">
         <option value="">All Barangays</option>
-        <option>Carmen</option>
-        <option>Balulang</option>
-        <option>Lapasan</option>
-        <option>Macasandig</option>
-        <option>Lumbia</option>
-        <option>Bulua</option>
-        <option>Nazareth</option>
-        <option>Kauswagan</option>
+        <option v-for="item in barangayOptions" :key="item._id" :value="item.name">{{ item.name }}</option>
       </select>
 
       <select v-model="category" class="filter-select">
@@ -190,7 +206,7 @@
 
             <!-- Location -->
             <td>
-              <div class="location-main">Brgy. {{ ticket.barangay || 'Carmen' }}</div>
+              <div class="location-main">Brgy. {{ ticket.barangay || 'Unknown' }}</div>
               <span class="location-sub">{{ ticket.landmark || ticket.purokZone || ticket.location }}</span>
             </td>
 
@@ -251,7 +267,7 @@
       <!-- Table Pagination Footer -->
       <div class="table-footer">
         <span class="footer-summary">
-          Showing {{ showingFrom }}–{{ showingTo }} of {{ filteredTickets.length }} reports
+          Showing {{ showingFrom }}–{{ showingTo }} of {{ filteredTotalCount }} {{ filteredTotalCount === 1 ? 'report' : 'reports' }}
         </span>
 
         <div v-if="totalPages > 1" class="pagination-controls">
@@ -341,18 +357,40 @@
           </div>
 
           <!-- Image Display Section -->
-          <div v-if="selectedTicket.photoUrl || selectedTicket.media" class="image-section">
-            <span class="meta-label">Report Image</span>
-            <div class="image-preview">
-              <img
-                :src="selectedTicket.photoUrl || selectedTicket.imageUrl || selectedTicket.image"
-                :alt="`Report image for ${selectedTicket.reportId}`"
-                @error="handleImageError"
-                class="ticket-image"
-              />
-              <span v-if="imageError" class="image-error">Image unavailable</span>
+          <template v-if="selectedTicket.photoUrl || selectedTicket.imageUrl || selectedTicket.image">
+            <div class="image-section">
+              <div class="image-section-header">
+                <span class="meta-label">Citizen Photo Evidence</span>
+                <button
+                  v-if="!imageError"
+                  type="button"
+                  class="view-full-btn"
+                  @click="openLightbox(selectedTicket.photoUrl || selectedTicket.imageUrl || selectedTicket.image)"
+                >
+                  🔍 Click to Enlarge
+                </button>
+              </div>
+              <div
+                class="image-preview"
+                :class="{ 'has-zoom': !imageError }"
+                @click="openLightbox(selectedTicket.photoUrl || selectedTicket.imageUrl || selectedTicket.image)"
+              >
+                <img
+                  :src="selectedTicket.photoUrl || selectedTicket.imageUrl || selectedTicket.image"
+                  :alt="`Report image for ${selectedTicket.reportId}`"
+                  @error="handleImageError"
+                  class="ticket-image"
+                />
+                <span v-if="imageError" class="image-error">Image unavailable</span>
+                <div v-if="!imageError" class="image-hover-overlay">
+                  <span>🔍 Click to View Full Resolution</span>
+                </div>
+              </div>
             </div>
-          </div>
+          </template>
+          <p v-else-if="selectedTicket.media" class="image-error">
+            The report is marked as containing evidence, but no photo URL was included with the submission.
+          </p>
 
           <!-- Description -->
           <div class="description-section">
@@ -400,13 +438,23 @@
               >
                 PENDING
               </button>
+              <button
+                type="button"
+                class="status-toggle-btn status-btn-rejected"
+                :class="{ active: assignment.status === 'REJECTED' }"
+                @click="setAssignmentStatus('REJECTED')"
+              >
+                REJECTED
+              </button>
             </div>
 
             <!-- Vehicle Assignment -->
             <div class="form-row">
               <label>Assign Collection Unit</label>
               <select v-model="assignment.unitAssigned" class="form-control" @change="isCustomUnit = assignment.unitAssigned === 'custom'">
-                <option v-for="truck in truckPresets" :key="truck" :value="truck">{{ truck }}</option>
+                <option v-for="truck in fleet" :key="truck.id" :value="truck.id">
+                  {{ truck.id }} (Driver: {{ truck.driver }}) — {{ truck.status }}
+                </option>
                 <option value="custom">Custom Truck / Quick-Response Unit</option>
               </select>
             </div>
@@ -435,12 +483,31 @@
         </div>
       </aside>
     </div>
+
+    <!-- Image Lightbox Modal -->
+    <div v-if="lightboxImage" class="lightbox-backdrop" @click="lightboxImage = null">
+      <div class="lightbox-modal" @click.stop>
+        <div class="lightbox-header">
+          <h3>📷 Citizen Incident Evidence Photo</h3>
+          <button type="button" class="lightbox-close-btn" @click="lightboxImage = null">✕</button>
+        </div>
+        <div class="lightbox-body">
+          <img :src="lightboxImage" alt="Citizen Photo Evidence" class="lightbox-img" />
+        </div>
+        <div class="lightbox-footer">
+          <a :href="lightboxImage" target="_blank" download="incident-evidence.jpg" class="btn btn-secondary">
+            Open in New Tab ↗
+          </a>
+          <button type="button" class="btn btn-primary" @click="lightboxImage = null">Close</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { computed, ref, onMounted, onUnmounted } from 'vue'
-import { reportsApi } from '../services/api'
+import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
+import { barangayApi, fleetApi, reportsApi } from '../services/api'
 
 const pageSize = 10
 const currentPage = ref(1)
@@ -449,10 +516,15 @@ const tickets = ref([])
 const isLoading = ref(true)
 const isRefreshing = ref(false)
 const isSaving = ref(false)
+const reportsError = ref('')
+const barangaysError = ref('')
+const fleetError = ref('')
 const lastSynced = ref('')
 const saveNotification = ref(null)
 
 let pollTimer = null
+let filterTimer = null
+let latestFetchId = 0
 
 const search = ref('')
 const barangay = ref('')
@@ -470,30 +542,28 @@ const assignment = ref({
   notes: ''
 })
 
-const categories = [
-  'Waste Collection',
-  'Illegal Dump Site',
-  'Overflowing Bin',
-  'Road Repair',
-  'Fallen Tree',
-  'Street Lighting'
-]
+const fleet = ref([])
+const barangayOptions = ref([])
+const categories = ref([])
+const truckPresets = computed(() => fleet.value.map(truck => truck.id))
 
-const truckPresets = [
-  'CLENRO Truck #4 (Driver: J. Cruz)',
-  'CLENRO Truck #1 (Driver: M. Reyes)',
-  'CLENRO Truck #2 (Driver: D. Cruz)',
-  'CLENRO Truck #3 (Driver: R. Tan)',
-  'CLENRO Truck #5 (Driver: P. Flores)',
-  'CLENRO Quick-Response Team (Driver: J. Santos)',
-  'Barangay Mini-Dumptruck #1'
-]
+const totalCount = ref(0)
+const filteredTotalCount = ref(0)
+const totalPages = ref(1)
+const statusCounts = ref({})
+const pendingCount = computed(() => statusCounts.value.PENDING || 0)
+const assignedCount = computed(() => statusCounts.value.ASSIGNED || 0)
+const inProgressCount = computed(() => statusCounts.value.IN_PROGRESS || 0)
+const resolvedCount = computed(() => statusCounts.value.RESOLVED || 0)
+const rejectedCount = computed(() => statusCounts.value.REJECTED || 0)
 
-const totalCount = computed(() => tickets.value.length)
-const pendingCount = computed(() => tickets.value.filter(t => normalizeStatus(t.status) === 'PENDING').length)
-const assignedCount = computed(() => tickets.value.filter(t => normalizeStatus(t.status) === 'ASSIGNED').length)
-const inProgressCount = computed(() => tickets.value.filter(t => normalizeStatus(t.status) === 'IN_PROGRESS').length)
-const resolvedCount = computed(() => tickets.value.filter(t => normalizeStatus(t.status) === 'RESOLVED').length)
+const lightboxImage = ref(null)
+
+function openLightbox(url) {
+  if (url && !imageError.value) {
+    lightboxImage.value = url
+  }
+}
 
 function normalizeStatus(status) {
   if (!status) return 'PENDING'
@@ -531,21 +601,36 @@ function formatTime(iso) {
 }
 
 async function fetchTickets(isBackground = false) {
+  const fetchId = ++latestFetchId
   if (!isBackground && tickets.value.length === 0) {
     isLoading.value = true
   }
 
   try {
-    const res = await reportsApi.getAll()
+    const res = await reportsApi.getAll({
+      search: search.value.trim(),
+      barangay: barangay.value,
+      category: category.value,
+      status: activeStatusFilter.value,
+      page: currentPage.value,
+      limit: pageSize
+    })
+    if (fetchId !== latestFetchId) return
+
     if (res && res.data) {
+      reportsError.value = ''
       tickets.value = res.data
+      totalCount.value = Number(res.total ?? res.count ?? res.data.length)
+      filteredTotalCount.value = Number(res.filteredTotal ?? res.total ?? res.count ?? res.data.length)
+      totalPages.value = Math.max(1, Number(res.totalPages) || 1)
+      statusCounts.value = res.statusCounts || {}
+      categories.value = res.categories || [...new Set(res.data.map(ticket => ticket.category).filter(Boolean))]
 
       if (selectedTicket.value) {
         const idToFind = selectedTicket.value.reportId || selectedTicket.value.id || selectedTicket.value._id
         const matched = res.data.find(t => (t.reportId === idToFind || t.id === idToFind || t._id === idToFind))
         if (matched) {
-          selectedTicket.value.status = matched.status
-          selectedTicket.value.unitAssigned = matched.unitAssigned
+          Object.assign(selectedTicket.value, matched)
         }
       }
 
@@ -553,10 +638,14 @@ async function fetchTickets(isBackground = false) {
       lastSynced.value = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })
     }
   } catch (err) {
+    if (fetchId !== latestFetchId) return
     console.error('Tickets fetch error:', err)
+    reportsError.value = err.message || 'Unable to load incident reports.'
   } finally {
-    isLoading.value = false
-    isRefreshing.value = false
+    if (fetchId === latestFetchId) {
+      isLoading.value = false
+      isRefreshing.value = false
+    }
   }
 }
 
@@ -578,57 +667,9 @@ function clearFilters() {
   currentPage.value = 1
 }
 
-const filteredTickets = computed(() => {
-  const kw = search.value.toLowerCase().trim()
-
-  return tickets.value.filter(ticket => {
-    const norm = normalizeStatus(ticket.status)
-
-    if (activeStatusFilter.value && norm !== activeStatusFilter.value) {
-      return false
-    }
-
-    if (barangay.value && (ticket.barangay || '').toLowerCase() !== barangay.value.toLowerCase()) {
-      return false
-    }
-
-    if (category.value && (ticket.category || '').toLowerCase() !== category.value.toLowerCase()) {
-      return false
-    }
-
-    if (kw) {
-      const haystack = [
-        ticket.reportId,
-        ticket.id,
-        ticket.userEmail,
-        ticket.reporter,
-        ticket.barangay,
-        ticket.location,
-        ticket.landmark,
-        ticket.gpsCoordinates,
-        ticket.category,
-        ticket.description,
-        ticket.unitAssigned
-      ].filter(Boolean).join(' ').toLowerCase()
-
-      if (!haystack.includes(kw)) {
-        return false
-      }
-    }
-
-    return true
-  })
-})
-
-const totalPages = computed(() => Math.max(1, Math.ceil(filteredTickets.value.length / pageSize)))
-
-const paginatedTickets = computed(() => {
-  const start = (currentPage.value - 1) * pageSize
-  return filteredTickets.value.slice(start, start + pageSize)
-})
-
-const showingFrom = computed(() => filteredTickets.value.length ? (currentPage.value - 1) * pageSize + 1 : 0)
-const showingTo = computed(() => Math.min(currentPage.value * pageSize, filteredTickets.value.length))
+const paginatedTickets = computed(() => tickets.value)
+const showingFrom = computed(() => totalCount.value ? (currentPage.value - 1) * pageSize + 1 : 0)
+const showingTo = computed(() => Math.min((currentPage.value - 1) * pageSize + tickets.value.length, filteredTotalCount.value))
 
 function goToPage(page) {
   currentPage.value = Math.min(Math.max(page, 1), totalPages.value)
@@ -640,7 +681,7 @@ function viewTicket(ticket) {
   imageError.value = false
 
   const currentUnit = ticket.unitAssigned && ticket.unitAssigned !== 'Unassigned' ? ticket.unitAssigned : ''
-  const isKnownTruck = truckPresets.includes(currentUnit)
+  const isKnownTruck = truckPresets.value.includes(currentUnit)
 
   if (currentUnit && !isKnownTruck) {
     isCustomUnit.value = true
@@ -650,9 +691,22 @@ function viewTicket(ticket) {
     customUnitInput.value = ''
   }
 
+  watch([search, barangay, category, activeStatusFilter], () => {
+    if (currentPage.value !== 1) {
+      currentPage.value = 1
+      return
+    }
+    clearTimeout(filterTimer)
+    filterTimer = setTimeout(() => fetchTickets(true), 300)
+  })
+
+  watch(currentPage, () => {
+    fetchTickets(true)
+  })
+
   assignment.value = {
     status: normalizeStatus(ticket.status) || 'ASSIGNED',
-    unitAssigned: isKnownTruck ? currentUnit : (currentUnit ? 'custom' : 'CLENRO Truck #4 (Driver: J. Cruz)'),
+    unitAssigned: isKnownTruck ? currentUnit : (currentUnit ? 'custom' : ''),
     notes: ticket.notes || ''
   }
 }
@@ -682,7 +736,12 @@ async function saveStatusAndDispatch() {
 
   let chosenUnit = assignment.value.unitAssigned
   if (chosenUnit === 'custom') {
-    chosenUnit = customUnitInput.value.trim() || 'CLENRO Quick-Response Team'
+    chosenUnit = customUnitInput.value.trim()
+  }
+  if (!chosenUnit) {
+    saveNotification.value = { type: 'error', text: 'Select a fleet vehicle or enter a custom unit.' }
+    isSaving.value = false
+    return
   }
 
   const payload = {
@@ -698,11 +757,12 @@ async function saveStatusAndDispatch() {
       ticket.status = res.data.status
       ticket.unitAssigned = res.data.unitAssigned
       saveNotification.value = { type: 'success', text: 'Dispatch changes saved successfully.' }
+    } else {
+      throw new Error('The server did not return the updated report.')
     }
   } catch (err) {
-    ticket.status = assignment.value.status
-    ticket.unitAssigned = chosenUnit
-    saveNotification.value = { type: 'success', text: 'Changes updated successfully.' }
+    console.error('Failed to save dispatch changes:', err)
+    saveNotification.value = { type: 'error', text: err.message || 'Unable to save dispatch changes.' }
   } finally {
     isSaving.value = false
   }
@@ -710,11 +770,30 @@ async function saveStatusAndDispatch() {
 
 onMounted(() => {
   fetchTickets(false)
+  barangayApi.getAll()
+    .then(response => {
+      barangayOptions.value = response.data || []
+      barangaysError.value = ''
+    })
+    .catch(err => {
+      console.error('Failed to load barangay filters:', err)
+      barangaysError.value = err.message || 'Unable to load barangay filters.'
+    })
+  fleetApi.getAll()
+    .then(response => {
+      fleet.value = response.data || []
+      fleetError.value = ''
+    })
+    .catch(err => {
+      console.error('Failed to load fleet assignments:', err)
+      fleetError.value = err.message || 'Unable to load fleet assignments.'
+    })
   pollTimer = setInterval(() => fetchTickets(true), 5000)
 })
 
 onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer)
+  if (filterTimer) clearTimeout(filterTimer)
 })
 </script>
 
@@ -1383,52 +1462,149 @@ onUnmounted(() => {
 
 .status-toggle-group {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 6px;
-}
-
-.status-toggle-btn {
-  background-color: var(--bg-surface);
-  border: 1px solid var(--border-muted);
-  border-radius: 4px;
-  color: var(--text-secondary);
-  font-size: 10px;
-  font-weight: 700;
-  padding: 6px 2px;
-  cursor: pointer;
-  font-family: var(--font-mono);
-}
-
-.status-toggle-btn.active {
-  background-color: var(--primary);
-  border-color: var(--primary);
-  color: #04140a;
-}
-
-.form-row {
-  display: flex;
-  flex-direction: column;
+  grid-template-columns: repeat(5, 1fr);
   gap: 5px;
 }
 
-.form-row label {
+.status-toggle-btn.status-btn-rejected.active {
+  background-color: #ef4444;
+  border-color: #ef4444;
+  color: #ffffff;
+}
+
+.counter-tab.status-rejected .count-number {
+  color: #ef4444;
+}
+
+.counter-tab.status-rejected .counter-progress-fill {
+  background-color: #ef4444;
+}
+
+.image-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.view-full-btn {
+  background: none;
+  border: none;
+  color: var(--primary, #10b981);
   font-size: 11px;
   font-weight: 600;
-  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
 }
 
-.form-control {
-  background-color: var(--bg-input);
-  border: 1px solid var(--border-muted);
-  border-radius: 6px;
-  color: var(--text-main);
+.image-preview {
+  position: relative;
+  cursor: pointer;
+  overflow: hidden;
+  border-radius: 8px;
+}
+
+.image-hover-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
   font-size: 12px;
-  padding: 8px 10px;
-  outline: none;
+  font-weight: 600;
+  opacity: 0;
+  transition: opacity 0.2s ease;
 }
 
-.form-control:focus {
-  border-color: var(--primary);
+.image-preview:hover .image-hover-overlay {
+  opacity: 1;
+}
+
+/* Lightbox Modal */
+.lightbox-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(4px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.lightbox-modal {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  max-width: 900px;
+  width: 100%;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+}
+
+.lightbox-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 20px;
+  border-bottom: 1px solid #334155;
+  background: #0f172a;
+}
+
+.lightbox-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.lightbox-close-btn {
+  background: none;
+  border: none;
+  color: #94a3b8;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.lightbox-close-btn:hover {
+  color: #ffffff;
+  background: #334155;
+}
+
+.lightbox-body {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: #020617;
+  max-height: 70vh;
+}
+
+.lightbox-img {
+  max-width: 100%;
+  max-height: 65vh;
+  object-fit: contain;
+  border-radius: 6px;
+}
+
+.lightbox-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 20px;
+  border-top: 1px solid #334155;
+  background: #0f172a;
 }
 
 .submit-dispatch-btn {

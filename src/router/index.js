@@ -6,6 +6,7 @@ import Fleet from '../views/Fleet.vue'
 import Barangays from '../views/Barangays.vue'
 import Reports from '../views/Reports.vue'
 import Settings from '../views/Settings.vue'
+import { getAuthToken } from '../services/api'
 
 const routes = [
   {
@@ -53,10 +54,13 @@ const router = createRouter({
 })
 
 router.beforeEach((to, from, next) => {
-  const token = localStorage.getItem('citycare_admin_token')
-  if (to.path !== '/login' && !token) {
+  const jwtToken = getAuthToken()
+  const firebaseToken = localStorage.getItem('firebaseToken')
+  const isAuthenticated = jwtToken || firebaseToken
+  
+  if (to.path !== '/login' && !isAuthenticated) {
     next('/login')
-  } else if (to.path === '/login' && token) {
+  } else if (to.path === '/login' && isAuthenticated) {
     next('/dashboard')
   } else {
     next()
